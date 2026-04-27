@@ -114,11 +114,12 @@ Everything else is blocked.
 
 Claude Code's web search and `WebFetch` tools do not work inside the container — they require access to search providers and arbitrary URLs, which the firewall blocks by design.
 
-If you need web search capability:
+The available options form a layered set, ordered from most-restrictive to least. **Pick the most restrictive layer that satisfies your need** — each step up trades sandbox isolation for capability.
 
-1. **MCP proxy on the host** — Run an MCP search server outside the container. The host network is already allowed, so Claude inside the container can reach it with no firewall changes. This keeps the sandbox locked down while providing controlled search access.
-2. **Allowlist a search API** — Add a specific search provider (e.g. `api.search.brave.com`) to `init-firewall.sh`. Claude gets search results but still cannot follow arbitrary result URLs.
-3. **Open outbound HTTP/HTTPS** — Allow all outbound traffic on ports 80/443. This works but largely defeats the purpose of the firewall.
+1. **MCP proxy on the host** *(most restrictive — sandbox stays locked down)* — Run an MCP search server outside the container. The host network is already allowed, so Claude inside the container can reach it with no firewall changes. You control exactly which queries leave your machine and which results come back.
+2. **Allowlist a specific search API** — Add a search provider (e.g. `api.search.brave.com`) to `init-firewall.sh` and rebuild the image. Claude gets search results but still cannot follow arbitrary result URLs.
+3. **Open outbound HTTP/HTTPS** — Allow all outbound traffic on ports 80/443 in `init-firewall.sh` and rebuild. Claude can reach any HTTP(S) URL, but other protocols (SSH, raw TCP, etc.) remain blocked.
+4. **Research mode (`make sandbox-run-research`)** *(least restrictive — convenience escape hatch)* — Skips firewall initialization entirely; outbound network is fully open. As a safety measure against code exfiltration, the container **refuses to start in research mode if `/workspace` is a git repository** (including worktrees, which share remotes, credentials, and hooks with their parent repo). Intended for ad-hoc research, scraping, or experiments in a scratch directory.
 
 ## Make Targets
 
