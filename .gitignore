@@ -1,0 +1,3 @@
+# Per-instance state — never track
+claude/
+commandhistory/

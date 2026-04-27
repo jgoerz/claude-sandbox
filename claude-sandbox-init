@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Verify required commands are available
+MISSING=()
+for cmd in docker mkdir cat; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    MISSING+=("$cmd")
+  fi
+done
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "Error: required commands not found:"
+  for cmd in "${MISSING[@]}"; do
+    echo "  - $cmd"
+  done
+  exit 1
+fi
+
+# Where this repo lives — update if you move it
+CLAUDE_SANDBOX_HOME="${CLAUDE_SANDBOX_HOME:-$HOME/devops/claude-sandbox}"
+
+usage() {
+  echo "Usage: claude-sandbox-init [TARGET_DIR]"
+  echo ""
+  echo "Initialize a directory for running Claude Code in a sandbox container."
+  echo "Uses the current directory if TARGET_DIR is not specified."
+  echo ""
+  echo "Creates:"
+  echo "  claude/            Per-instance config (bootstrapped on first run)"
+  echo "  commandhistory/    Persistent bash history"
+  echo "  docker-compose.yml Container run config"
+  echo "  Makefile           Convenience targets: run, connect, stop, destroy"
+  echo ""
+  echo "Environment:"
+  echo "  CLAUDE_SANDBOX_HOME  Path to claude-sandbox repo (default: ~/devops/claude-sandbox)"
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+TARGET_DIR="${1:-.}"
+TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+
+# Verify the image exists
+if ! docker image inspect claude-sandbox >/dev/null 2>&1; then
+  echo "Error: claude-sandbox image not found. Build it first:"
+  echo "  cd $CLAUDE_SANDBOX_HOME && make build"
+  exit 1
+fi
+
+echo "Initializing claude-sandbox in: $TARGET_DIR"
+
+# Check for existing files/directories that would be overwritten
+CONFLICTS=()
+for item in claude commandhistory docker-compose.yml Makefile; do
+  if [ -e "$TARGET_DIR/$item" ]; then
+    CONFLICTS+=("$item")
+  fi
+done
+
+if [ ${#CONFLICTS[@]} -gt 0 ]; then
+  echo "The following already exist in $TARGET_DIR:"
+  for item in "${CONFLICTS[@]}"; do
+    echo "  - $item"
+  done
+  echo ""
+  read -r -p "Overwrite? [y/N] " answer
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    echo "Aborted. No files were modified."
+    exit 1
+  fi
+fi
+
+# Create directories
+mkdir -p "$TARGET_DIR/claude" "$TARGET_DIR/commandhistory"
+
+# Generate docker-compose.yml
+cat > "$TARGET_DIR/docker-compose.yml" <<'EOF'
+services:
+  claude-sandbox:
+    image: claude-sandbox
+    user: claude
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - .:/workspace:delegated
+      - ./claude:/home/claude/.claude:cached
+      - ./commandhistory:/commandhistory:cached
+    environment:
+      CLAUDE_CONFIG_DIR: "/home/claude/.claude"
+EOF
+
+# Generate Makefile
+cat > "$TARGET_DIR/Makefile" <<'MAKEOF'
+COMPOSE := docker compose
+
+.PHONY: run connect stop destroy status help
+
+## Start the sandbox in the background
+run:
+	$(COMPOSE) up -d
+
+## Attach a bash shell to the running sandbox
+connect:
+	docker exec -it $$($(COMPOSE) ps -q claude-sandbox) bash
+
+## Stop the sandbox (keeps state)
+stop:
+	$(COMPOSE) stop
+
+## Remove the sandbox container
+destroy:
+	$(COMPOSE) down
+
+## Show container status
+status:
+	$(COMPOSE) ps
+
+## Show this help
+help:
+	@echo "Targets:"
+	@echo "  run      - Start the sandbox in the background"
+	@echo "  connect  - Attach a bash shell"
+	@echo "  stop     - Stop the sandbox (keeps state)"
+	@echo "  destroy  - Remove the sandbox container"
+	@echo "  status   - Show container status"
+MAKEOF
+
+echo ""
+echo "Done. Next steps:"
+echo "  cd $TARGET_DIR"
+echo "  make run"
+echo "  make connect"
+echo "  # On first run: claude login"

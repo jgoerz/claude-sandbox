@@ -1,0 +1,19 @@
+services:
+  claude-sandbox:
+    image: claude-sandbox
+    user: claude
+    working_dir: /workspace
+    stdin_open: true   # -i (interactive)
+    tty: true          # -t (allocate pseudo-TTY)
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      # Bind-mount current directory as the workspace
+      - .:/workspace:delegated
+      # Per-instance Claude config (bootstrapped from template on first run)
+      - ./claude:/home/claude/.claude:cached
+      # Persistent bash history
+      - ./commandhistory:/commandhistory:cached
+    environment:
+      CLAUDE_CONFIG_DIR: "/home/claude/.claude"
