@@ -1,8 +1,8 @@
 IMAGE_NAME   := claude-sandbox
 SERVICE_NAME := claude-sandbox
-COMPOSE      := docker compose
+COMPOSE      := docker compose -f claude-sandbox-compose.yml
 
-.PHONY: build run connect stop destroy clean logs status help
+.PHONY: build run connect stop destroy clean logs status test help
 
 ## Build the container image (does not start it)
 build:
@@ -36,6 +36,10 @@ logs:
 status:
 	$(COMPOSE) ps
 
+## Run smoke tests for claude-sandbox-init
+test:
+	./test-init.sh
+
 ## Show this help
 help:
 	@echo "Targets:"
@@ -47,3 +51,4 @@ help:
 	@echo "  clean    - Remove container and image"
 	@echo "  logs     - Tail container logs"
 	@echo "  status   - Show container status"
+	@echo "  test     - Run smoke tests for claude-sandbox-init"

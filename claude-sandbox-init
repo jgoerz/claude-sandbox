@@ -1,42 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verify required commands are available
-MISSING=()
-for cmd in docker mkdir cat; do
-  if ! command -v "$cmd" >/dev/null 2>&1; then
-    MISSING+=("$cmd")
-  fi
-done
-if [ ${#MISSING[@]} -gt 0 ]; then
-  echo "Error: required commands not found:"
-  for cmd in "${MISSING[@]}"; do
-    echo "  - $cmd"
-  done
-  exit 1
-fi
-
-# Where this repo lives — update if you move it
-CLAUDE_SANDBOX_HOME="${CLAUDE_SANDBOX_HOME:-$HOME/claude-sandbox}"
-
 usage() {
-  echo "Usage: claude-sandbox-init [TARGET_DIR]"
-  echo ""
-  echo "Initialize a directory for running Claude Code in a sandbox container."
-  echo "Uses the current directory if TARGET_DIR is not specified."
-  echo ""
-  echo "The generated Makefile provides two launch modes:"
-  echo "  make run          Start in code mode (firewall enabled)"
-  echo "  make run-research Start in research mode (open network, git repos blocked)"
-  echo ""
-  echo "Creates:"
-  echo "  claude/            Per-instance config (bootstrapped on first run)"
-  echo "  commandhistory/    Persistent bash history"
-  echo "  docker-compose.yml Container run config"
-  echo "  Makefile           Convenience targets: run, run-research, connect, stop, destroy"
-  echo ""
-  echo "Environment:"
-  echo "  CLAUDE_SANDBOX_HOME  Path to claude-sandbox repo (default: ~/devops/claude-sandbox)"
+  cat <<'EOF'
+Usage: claude-sandbox-init [TARGET_DIR]
+
+Initialize a directory for running Claude Code in a sandbox container.
+Uses the current directory if TARGET_DIR is not specified.
+
+The generated targets provide two launch modes:
+  make sandbox-run          Start in code mode (firewall enabled)
+  make sandbox-run-research Start in research mode (open network, git repos blocked)
+
+Creates:
+  claude/                     Per-instance config (bootstrapped on first run)
+  commandhistory/             Persistent bash history
+  claude-sandbox-compose.yml  Container run config
+  claude-sandbox.mk           Make targets: sandbox-run, sandbox-connect, ...
+  Makefile                    Created if missing; otherwise gets an
+                              `include claude-sandbox.mk` block appended
+
+Resolution of the claude-sandbox repo location, in order:
+  1. $CLAUDE_SANDBOX_HOME if set
+  2. The directory containing this script (resolved through symlinks)
+  3. $HOME/claude-sandbox
+
+Environment:
+  CLAUDE_SANDBOX_HOME  Override auto-detection of the claude-sandbox repo
+EOF
 }
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
@@ -44,107 +35,154 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
-TARGET_DIR="${1:-.}"
-TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+is_sandbox_home() {
+  local dir="$1"
+  [ -d "$dir" ] \
+    && [ -f "$dir/Dockerfile" ] \
+    && [ -f "$dir/init-firewall.sh" ] \
+    && [ -f "$dir/claude-sandbox-compose.yml" ] \
+    && [ -d "$dir/claude-template" ]
+}
 
-# Verify the image exists
-if ! docker image inspect claude-sandbox >/dev/null 2>&1; then
-  echo "Error: claude-sandbox image not found. Build it first:"
-  echo "  cd $CLAUDE_SANDBOX_HOME && make build"
-  exit 1
-fi
+resolve_sandbox_home() {
+  if [ -n "${CLAUDE_SANDBOX_HOME:-}" ]; then
+    if is_sandbox_home "$CLAUDE_SANDBOX_HOME"; then
+      echo "$CLAUDE_SANDBOX_HOME"
+    fi
+    return
+  fi
+  local script_dir
+  script_dir="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+  if is_sandbox_home "$script_dir"; then
+    echo "$script_dir"
+    return
+  fi
+  if is_sandbox_home "$HOME/claude-sandbox"; then
+    echo "$HOME/claude-sandbox"
+    return
+  fi
+}
 
-echo "Initializing claude-sandbox in: $TARGET_DIR"
+PROBLEMS=()
 
-# Check for existing files/directories that would be overwritten
-CONFLICTS=()
-for item in claude commandhistory docker-compose.yml Makefile; do
-  if [ -e "$TARGET_DIR/$item" ]; then
-    CONFLICTS+=("$item")
+for cmd in docker mkdir cat readlink grep; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    PROBLEMS+=("required command not found: $cmd")
   fi
 done
 
-if [ ${#CONFLICTS[@]} -gt 0 ]; then
-  echo "The following already exist in $TARGET_DIR:"
-  for item in "${CONFLICTS[@]}"; do
-    echo "  - $item"
-  done
-  echo ""
-  read -r -p "Overwrite? [y/N] " answer
-  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
-    echo "Aborted. No files were modified."
-    exit 1
+RESOLVED_HOME="$(resolve_sandbox_home || true)"
+if [ -n "$RESOLVED_HOME" ]; then
+  CLAUDE_SANDBOX_HOME="$RESOLVED_HOME"
+elif [ -n "${CLAUDE_SANDBOX_HOME:-}" ]; then
+  PROBLEMS+=("CLAUDE_SANDBOX_HOME is set to '$CLAUDE_SANDBOX_HOME' but that is not a valid claude-sandbox repo (missing Dockerfile, init-firewall.sh, claude-sandbox-compose.yml, or claude-template/)")
+else
+  PROBLEMS+=("could not locate the claude-sandbox repo. Tried: directory of this script, and \$HOME/claude-sandbox.
+    Fix by one of:
+      - symlink the script into your PATH:  ln -sf /path/to/claude-sandbox/claude-sandbox-init ~/bin/claude-sandbox-init
+      - clone the repo to \$HOME/claude-sandbox
+      - export CLAUDE_SANDBOX_HOME=/path/to/claude-sandbox")
+fi
+
+if ! docker image inspect claude-sandbox >/dev/null 2>&1; then
+  if [ -n "$RESOLVED_HOME" ]; then
+    PROBLEMS+=("claude-sandbox image not built. Build it with: cd $RESOLVED_HOME && make build")
+  else
+    PROBLEMS+=("claude-sandbox image not built. Build it from the repo with: make build")
   fi
 fi
 
-# Create directories
+if [ ${#PROBLEMS[@]} -gt 0 ]; then
+  echo "Error: cannot proceed:"
+  for p in "${PROBLEMS[@]}"; do
+    echo "  - $p"
+  done
+  exit 1
+fi
+
+TARGET_DIR="${1:-.}"
+TARGET_DIR="$(cd "$TARGET_DIR" && pwd)"
+
+echo "Initializing claude-sandbox in: $TARGET_DIR"
+
 mkdir -p "$TARGET_DIR/claude" "$TARGET_DIR/commandhistory"
 
-# Generate docker-compose.yml
-cat > "$TARGET_DIR/docker-compose.yml" <<'EOF'
-services:
-  claude-sandbox:
-    image: claude-sandbox
-    user: claude
-    working_dir: /workspace
-    stdin_open: true
-    tty: true
-    cap_add:
-      - NET_ADMIN
-      - NET_RAW
-    volumes:
-      - .:/workspace:delegated
-      - ./claude:/home/claude/.claude:cached
-      - ./commandhistory:/commandhistory:cached
-    environment:
-      CLAUDE_CONFIG_DIR: "/home/claude/.claude"
-      SANDBOX_MODE: "${SANDBOX_MODE:-code}"
-EOF
+cat "$CLAUDE_SANDBOX_HOME/claude-sandbox-compose.yml" > "$TARGET_DIR/claude-sandbox-compose.yml"
 
-# Generate Makefile
-cat > "$TARGET_DIR/Makefile" <<'MAKEOF'
-COMPOSE := docker compose
+{
+  echo "SANDBOX_REPO := $CLAUDE_SANDBOX_HOME"
+  cat <<'MAKEOF'
+SANDBOX_COMPOSE := docker compose -f claude-sandbox-compose.yml
 
-.PHONY: run run-research connect stop destroy status help
+.PHONY: sandbox-run sandbox-run-research sandbox-connect sandbox-stop sandbox-destroy sandbox-status sandbox-help _sandbox-check-image
+
+_sandbox-check-image:
+	@docker image inspect claude-sandbox >/dev/null 2>&1 || { \
+		echo "Error: claude-sandbox image not found."; \
+		echo "Build it with: cd $(SANDBOX_REPO) && make build"; \
+		exit 1; \
+	}
 
 ## Start the sandbox in code mode (firewall enabled)
-run:
-	SANDBOX_MODE=code $(COMPOSE) up -d
+sandbox-run: _sandbox-check-image
+	SANDBOX_MODE=code $(SANDBOX_COMPOSE) up -d
 
 ## Start the sandbox in research mode (open network, no git repos allowed)
-run-research:
-	SANDBOX_MODE=research $(COMPOSE) up -d
+sandbox-run-research: _sandbox-check-image
+	SANDBOX_MODE=research $(SANDBOX_COMPOSE) up -d
 
 ## Attach a bash shell to the running sandbox
-connect:
-	docker exec -it $$($(COMPOSE) ps -q claude-sandbox) bash
+sandbox-connect:
+	docker exec -it $$($(SANDBOX_COMPOSE) ps -q claude-sandbox) bash
 
 ## Stop the sandbox (keeps state)
-stop:
-	$(COMPOSE) stop
+sandbox-stop:
+	$(SANDBOX_COMPOSE) stop
 
 ## Remove the sandbox container
-destroy:
-	$(COMPOSE) down
+sandbox-destroy:
+	$(SANDBOX_COMPOSE) down
 
 ## Show container status
-status:
-	$(COMPOSE) ps
+sandbox-status:
+	$(SANDBOX_COMPOSE) ps
 
-## Show this help
-help:
-	@echo "Targets:"
-	@echo "  run          - Start in code mode (firewall enabled)"
-	@echo "  run-research - Start in research mode (open network)"
-	@echo "  connect      - Attach a bash shell"
-	@echo "  stop         - Stop the sandbox (keeps state)"
-	@echo "  destroy      - Remove the sandbox container"
-	@echo "  status       - Show container status"
+## Show claude-sandbox targets
+sandbox-help:
+	@echo "claude-sandbox targets:"
+	@echo "  sandbox-run          - Start in code mode (firewall enabled)"
+	@echo "  sandbox-run-research - Start in research mode (open network)"
+	@echo "  sandbox-connect      - Attach a bash shell"
+	@echo "  sandbox-stop         - Stop the sandbox (keeps state)"
+	@echo "  sandbox-destroy      - Remove the sandbox container"
+	@echo "  sandbox-status       - Show container status"
 MAKEOF
+} > "$TARGET_DIR/claude-sandbox.mk"
+
+MAKEFILE="$TARGET_DIR/Makefile"
+INCLUDE_LINE='include claude-sandbox.mk'
+if [ ! -e "$MAKEFILE" ]; then
+  cat > "$MAKEFILE" <<'EOF'
+### BEGIN claude-sandbox ###
+include claude-sandbox.mk
+### END claude-sandbox ###
+EOF
+  echo "Created Makefile with claude-sandbox include block."
+elif grep -qF "$INCLUDE_LINE" "$MAKEFILE"; then
+  : # already wired up
+else
+  cat >> "$MAKEFILE" <<'EOF'
+
+### BEGIN claude-sandbox ###
+include claude-sandbox.mk
+### END claude-sandbox ###
+EOF
+  echo "Appended claude-sandbox include block to existing Makefile."
+fi
 
 echo ""
 echo "Done. Next steps:"
 echo "  cd $TARGET_DIR"
-echo "  make run"
-echo "  make connect"
+echo "  make sandbox-run"
+echo "  make sandbox-connect"
 echo "  # On first run: claude login"
