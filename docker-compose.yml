@@ -17,3 +17,4 @@ services:
       - ./commandhistory:/commandhistory:cached
     environment:
       CLAUDE_CONFIG_DIR: "/home/claude/.claude"
+      SANDBOX_MODE: "${SANDBOX_MODE:-code}"

@@ -17,7 +17,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
 fi
 
 # Where this repo lives — update if you move it
-CLAUDE_SANDBOX_HOME="${CLAUDE_SANDBOX_HOME:-$HOME/devops/claude-sandbox}"
+CLAUDE_SANDBOX_HOME="${CLAUDE_SANDBOX_HOME:-$HOME/claude-sandbox}"
 
 usage() {
   echo "Usage: claude-sandbox-init [TARGET_DIR]"
@@ -25,11 +25,15 @@ usage() {
   echo "Initialize a directory for running Claude Code in a sandbox container."
   echo "Uses the current directory if TARGET_DIR is not specified."
   echo ""
+  echo "The generated Makefile provides two launch modes:"
+  echo "  make run          Start in code mode (firewall enabled)"
+  echo "  make run-research Start in research mode (open network, git repos blocked)"
+  echo ""
   echo "Creates:"
   echo "  claude/            Per-instance config (bootstrapped on first run)"
   echo "  commandhistory/    Persistent bash history"
   echo "  docker-compose.yml Container run config"
-  echo "  Makefile           Convenience targets: run, connect, stop, destroy"
+  echo "  Makefile           Convenience targets: run, run-research, connect, stop, destroy"
   echo ""
   echo "Environment:"
   echo "  CLAUDE_SANDBOX_HOME  Path to claude-sandbox repo (default: ~/devops/claude-sandbox)"
@@ -94,17 +98,22 @@ services:
       - ./commandhistory:/commandhistory:cached
     environment:
       CLAUDE_CONFIG_DIR: "/home/claude/.claude"
+      SANDBOX_MODE: "${SANDBOX_MODE:-code}"
 EOF
 
 # Generate Makefile
 cat > "$TARGET_DIR/Makefile" <<'MAKEOF'
 COMPOSE := docker compose
 
-.PHONY: run connect stop destroy status help
+.PHONY: run run-research connect stop destroy status help
 
-## Start the sandbox in the background
+## Start the sandbox in code mode (firewall enabled)
 run:
-	$(COMPOSE) up -d
+	SANDBOX_MODE=code $(COMPOSE) up -d
+
+## Start the sandbox in research mode (open network, no git repos allowed)
+run-research:
+	SANDBOX_MODE=research $(COMPOSE) up -d
 
 ## Attach a bash shell to the running sandbox
 connect:
@@ -125,11 +134,12 @@ status:
 ## Show this help
 help:
 	@echo "Targets:"
-	@echo "  run      - Start the sandbox in the background"
-	@echo "  connect  - Attach a bash shell"
-	@echo "  stop     - Stop the sandbox (keeps state)"
-	@echo "  destroy  - Remove the sandbox container"
-	@echo "  status   - Show container status"
+	@echo "  run          - Start in code mode (firewall enabled)"
+	@echo "  run-research - Start in research mode (open network)"
+	@echo "  connect      - Attach a bash shell"
+	@echo "  stop         - Stop the sandbox (keeps state)"
+	@echo "  destroy      - Remove the sandbox container"
+	@echo "  status       - Show container status"
 MAKEOF
 
 echo ""
