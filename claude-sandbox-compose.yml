@@ -3,6 +3,7 @@ services:
     image: claude-sandbox
     user: claude
     working_dir: /workspace
+    hostname: ${HOST_DIR_NAME}
     stdin_open: true   # -i (interactive)
     tty: true          # -t (allocate pseudo-TTY)
     cap_add:
@@ -15,6 +16,9 @@ services:
       - ./claude:/home/claude/.claude:cached
       # Persistent bash history
       - ./commandhistory:/commandhistory:cached
+      # Project memory
+      - /home/jesse/memory/data/documents:/home/claude/memory/data/documents:ro
+      # Stuff we need to write to
+      - /home/jesse/memory/data/documents/projects/prototype-plugin-arch:/home/claude/memory/data/documents/projects/prototype-plugin-arch
     environment:
       CLAUDE_CONFIG_DIR: "/home/claude/.claude"
-      SANDBOX_MODE: "${SANDBOX_MODE:-code}"

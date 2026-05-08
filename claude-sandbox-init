@@ -116,6 +116,9 @@ SANDBOX_COMPOSE := docker compose -f claude-sandbox-compose.yml
 
 .PHONY: sandbox-run sandbox-run-research sandbox-connect sandbox-stop sandbox-destroy sandbox-status sandbox-help _sandbox-check-image
 
+HOST_DIR_NAME := $(notdir $(CURDIR))
+export HOST_DIR_NAME
+
 _sandbox-check-image:
 	@docker image inspect claude-sandbox >/dev/null 2>&1 || { \
 		echo "Error: claude-sandbox image not found."; \
